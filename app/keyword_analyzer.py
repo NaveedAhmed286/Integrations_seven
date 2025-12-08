@@ -1,200 +1,269 @@
 import os
 import json
+import aiohttp
 from datetime import datetime
-from typing import Dict, List
-import requests
+from typing import Dict, List, Optional
 from app.logger import logger
+from app.apify_client import apify_client
+from app.agent import agent
+from app.memory_manager import memory_manager
 
 class KeywordAnalyzer:
     def __init__(self):
-        self.apify_api_key = os.getenv("APIFY_API_KEY")
-    
-    async def analyze(self, keyword: str, max_products: int = 50) -> Dict:
-        """Analyze keyword for profitability"""
-        logger.info(f"Analyzing keyword: {keyword}")
+        self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
         
+    async def analyze(self, keyword: str, max_products: int = 50) -> Dict:
+        """Analyze keyword for Amazon market opportunity"""
         try:
-            # Search for products with this keyword
-            products = await self._search_amazon(keyword, max_products)
+            logger.info(f"Starting keyword analysis: '{keyword}'")
+            
+            # Step 1: Scrape products for this keyword
+            products = await apify_client.scrape_amazon_products(keyword, max_products)
             
             if not products:
                 return {
-                    "keyword": keyword,
-                    "error": "No products found",
-                    "recommendation": "Try different keyword"
+                    "status": "error",
+                    "error": "No products found for this keyword",
+                    "keyword": keyword
                 }
             
-            # Analyze the market
-            analysis = await self._analyze_market(products, keyword)
+            # Step 2: Analyze market data
+            market_analysis = await self._analyze_market_data(products, keyword)
+            
+            # Step 3: Get AI insights
+            ai_insights = await self._get_keyword_insights(keyword, products, market_analysis)
+            
+            # Step 4: Calculate opportunity score
+            opportunity_score = self._calculate_opportunity_score(market_analysis, ai_insights)
+            
+            # Step 5: Generate recommendations
+            recommendations = self._generate_recommendations(keyword, market_analysis, ai_insights, opportunity_score)
             
             return {
+                "status": "success",
                 "keyword": keyword,
-                "products_found": len(products),
-                "market_analysis": analysis,
-                "opportunity_score": self._calculate_opportunity_score(analysis),
-                "recommendations": self._generate_keyword_recommendations(analysis),
+                "products_analyzed": len(products),
+                "market_analysis": market_analysis,
+                "ai_insights": ai_insights,
+                "opportunity_score": opportunity_score,
+                "recommendations": recommendations,
+                "sample_products": products[:3],  # First 3 products as sample
                 "timestamp": datetime.utcnow().isoformat()
             }
             
         except Exception as e:
             logger.error(f"Keyword analysis error: {e}")
             return {
+                "status": "error",
                 "keyword": keyword,
-                "error": str(e),
-                "status": "failed"
+                "error": str(e)
             }
     
-    async def _search_amazon(self, keyword: str, max_products: int) -> List[Dict]:
-        """Search Amazon for products"""
-        # Use Apify or Amazon API
-        # For now, return mock data
-        logger.info(f"Mock search for: {keyword}")
-        
-        return [
-            {
-                "title": f"Premium {keyword}",
-                "price": 49.99,
-                "rating": 4.5,
-                "reviews": 128,
-                "bsr": 1500,
-                "url": f"https://amazon.com/dp/MOCK001"
-            },
-            {
-                "title": f"Basic {keyword}",
-                "price": 19.99,
-                "rating": 4.0,
-                "reviews": 89,
-                "bsr": 4500,
-                "url": f"https://amazon.com/dp/MOCK002"
-            }
-        ]
+    async def analyze_with_memory(self, client_id: str, keyword: str, max_products: int = 50) -> Dict:
+        """Analyze keyword with client memory context"""
+        try:
+            # Get client's previous keyword analyses
+            client_context = await memory_manager.get_client_context(client_id)
+            
+            # Perform analysis
+            result = await self.analyze(keyword, max_products)
+            
+            if result["status"] == "success":
+                # Store in memory
+                task_id = f"keyword_{int(datetime.utcnow().timestamp())}"
+                await memory_manager.learn_from_analysis(
+                    client_id=client_id,
+                    task_id=task_id,
+                    analysis_type="keyword_analysis",
+                    input_data={"keyword": keyword, "max_products": max_products},
+                    result_data=result,
+                    key_insights=result.get("ai_insights", {}).get("key_points", [])
+                )
+                
+                result["client_id"] = client_id
+                result["personalized"] = True
+                
+            return result
+            
+        except Exception as e:
+            logger.error(f"Memory keyword analysis error: {e}")
+            return await self.analyze(keyword, max_products)  # Fallback
     
-    async def _analyze_market(self, products: List[Dict], keyword: str) -> Dict:
-        """Analyze market for keyword"""
-        prices = [p.get("price", 0) for p in products if p.get("price")]
-        ratings = [p.get("rating", 0) for p in products if p.get("rating")]
-        reviews = [p.get("reviews", 0) for p in products if p.get("reviews")]
-        
-        if not prices:
-            return {"error": "No price data"}
+    async def _analyze_market_data(self, products: List[Dict], keyword: str) -> Dict:
+        """Analyze market data from scraped products"""
+        if not products:
+            return {}
         
         # Calculate statistics
-        avg_price = sum(prices) / len(prices)
-        min_price = min(prices)
-        max_price = max(prices)
+        prices = [p.get("price") for p in products if p.get("price") and isinstance(p.get("price"), (int, float))]
+        ratings = [p.get("rating") for p in products if p.get("rating") and isinstance(p.get("rating"), (int, float))]
+        reviews = [p.get("review_count") for p in products if p.get("review_count") and isinstance(p.get("review_count"), int)]
         
-        # Find price gaps
-        price_gaps = self._find_price_gaps(prices)
+        avg_price = sum(prices) / len(prices) if prices else 0
+        avg_rating = sum(ratings) / len(ratings) if ratings else 0
+        total_reviews = sum(reviews) if reviews else 0
         
-        # Assess competition
-        competition_level = self._assess_competition(len(products), avg_price)
+        # Competition analysis
+        competition_level = self._assess_competition(products)
         
         return {
+            "total_products": len(products),
             "average_price": round(avg_price, 2),
-            "price_range": f"${min_price:.2f} - ${max_price:.2f}",
-            "average_rating": sum(ratings) / len(ratings) if ratings else 0,
-            "total_reviews": sum(reviews) if reviews else 0,
-            "product_count": len(products),
+            "price_range": {
+                "min": min(prices) if prices else 0,
+                "max": max(prices) if prices else 0
+            },
+            "average_rating": round(avg_rating, 2),
+            "total_reviews": total_reviews,
             "competition_level": competition_level,
-            "price_gaps": price_gaps,
-            "market_saturation": self._calculate_saturation(len(products))
+            "market_saturation": self._calculate_saturation(len(products), avg_rating),
+            "top_sellers": [p for p in sorted(products, key=lambda x: x.get("review_count", 0), reverse=True)[:3]]
         }
     
-    def _find_price_gaps(self, prices: List[float]) -> List[Dict]:
-        """Find gaps in price distribution"""
-        if len(prices) < 3:
-            return []
+    async def _get_keyword_insights(self, keyword: str, products: List[Dict], market_data: Dict) -> Dict:
+        """Get AI-powered insights for keyword"""
+        if not self.deepseek_api_key:
+            return {"key_points": ["AI analysis not configured"]}
         
-        sorted_prices = sorted(prices)
-        gaps = []
-        
-        for i in range(len(sorted_prices) - 1):
-            current = sorted_prices[i]
-            next_price = sorted_prices[i + 1]
-            gap = next_price - current
+        try:
+            # Prepare context for AI
+            context = f"""
+            Keyword: {keyword}
             
-            # If gap is significant (>20% of lower price)
-            if gap > current * 0.2:
-                gaps.append({
-                    "low": round(current, 2),
-                    "high": round(next_price, 2),
-                    "gap_size": round(gap, 2),
-                    "opportunity_price": round(current + gap/2, 2)
-                })
-        
-        return gaps
+            Market Analysis:
+            - Total Products: {market_data.get('total_products', 0)}
+            - Average Price: ${market_data.get('average_price', 0)}
+            - Average Rating: {market_data.get('average_rating', 0)}/5
+            - Competition Level: {market_data.get('competition_level', 'Unknown')}
+            - Market Saturation: {market_data.get('market_saturation', 'Unknown')}
+            
+            Sample Products (first 3):
+            {json.dumps(products[:3], indent=2)}
+            
+            Provide insights on:
+            1. Market opportunity for this keyword
+            2. Competitive landscape
+            3. Recommended price point
+            4. Potential challenges
+            5. Success probability
+            """
+            
+            # Call DeepSeek (using agent's method or direct call)
+            # This is simplified - integrate with your agent's AI call
+            insights = await self._call_deepseek_ai(context)
+            
+            return {
+                "key_points": insights.split("\n") if "\n" in insights else [insights],
+                "summary": f"Analysis of '{keyword}' market",
+                "generated_at": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"AI insights error: {e}")
+            return {"key_points": [f"AI analysis failed: {str(e)}"]}
     
-    def _assess_competition(self, product_count: int, avg_price: float) -> str:
+    async def _call_deepseek_ai(self, context: str) -> str:
+        """Call DeepSeek API for insights"""
+        # Simplified - integrate with your agent's AI calling method
+        # For now, return placeholder
+        return f"Market analysis for provided context. Consider competition and pricing strategies."
+    
+    def _assess_competition(self, products: List[Dict]) -> str:
         """Assess competition level"""
-        if product_count < 10:
-            return "Low"
-        elif product_count < 30:
-            return "Medium"
-        elif product_count < 100:
-            return "High"
-        else:
+        if not products:
+            return "Unknown"
+        
+        avg_rating = sum(p.get("rating", 0) for p in products if p.get("rating")) / len(products)
+        total_reviews = sum(p.get("review_count", 0) for p in products if p.get("review_count"))
+        
+        if len(products) > 100 and total_reviews > 10000:
             return "Very High"
+        elif len(products) > 50 and total_reviews > 5000:
+            return "High"
+        elif len(products) > 20 and total_reviews > 1000:
+            return "Medium"
+        else:
+            return "Low"
     
-    def _calculate_saturation(self, product_count: int) -> str:
+    def _calculate_saturation(self, product_count: int, avg_rating: float) -> str:
         """Calculate market saturation"""
-        if product_count < 20:
-            return "Underserved"
-        elif product_count < 50:
+        if product_count > 100 and avg_rating > 4.0:
+            return "Highly Saturated"
+        elif product_count > 50 and avg_rating > 3.5:
+            return "Saturated"
+        elif product_count > 20:
             return "Moderate"
         else:
-            return "Saturated"
+            return "Low"
     
-    def _calculate_opportunity_score(self, analysis: Dict) -> int:
-        """Calculate opportunity score (1-100)"""
-        score = 50
+    def _calculate_opportunity_score(self, market_data: Dict, ai_insights: Dict) -> float:
+        """Calculate opportunity score (0-100)"""
+        score = 50  # Base score
         
         # Adjust based on competition
-        competition = analysis.get("competition_level", "Medium")
-        if competition == "Low":
-            score += 30
-        elif competition == "Medium":
-            score += 10
-        elif competition == "High":
-            score -= 10
-        else:
-            score -= 30
-        
-        # Adjust based on price gaps
-        price_gaps = analysis.get("price_gaps", [])
-        if price_gaps:
-            score += len(price_gaps) * 5
-        
-        # Adjust based on saturation
-        saturation = analysis.get("market_saturation", "Moderate")
-        if saturation == "Underserved":
+        competition = market_data.get("competition_level", "").lower()
+        if "low" in competition:
             score += 20
-        elif saturation == "Saturated":
+        elif "medium" in competition:
+            score += 10
+        elif "high" in competition:
+            score -= 10
+        elif "very high" in competition:
             score -= 20
         
-        return min(max(score, 1), 100)
+        # Adjust based on market saturation
+        saturation = market_data.get("market_saturation", "").lower()
+        if "low" in saturation:
+            score += 15
+        elif "moderate" in saturation:
+            score += 5
+        elif "saturated" in saturation:
+            score -= 10
+        
+        # Adjust based on average rating
+        avg_rating = market_data.get("average_rating", 0)
+        if avg_rating > 4.0:
+            score += 10
+        elif avg_rating > 3.5:
+            score += 5
+        
+        # Ensure score is between 0-100
+        return max(0, min(100, round(score, 1)))
     
-    def _generate_keyword_recommendations(self, analysis: Dict) -> List[str]:
-        """Generate keyword recommendations"""
+    def _generate_recommendations(self, keyword: str, market_data: Dict, 
+                                 ai_insights: Dict, opportunity_score: float) -> List[str]:
+        """Generate actionable recommendations"""
         recommendations = []
-        score = analysis.get("opportunity_score", 50)
-        competition = analysis.get("competition_level", "Medium")
         
-        if score >= 70:
-            recommendations.append("Excellent opportunity - Low competition, good margins")
-        elif score >= 50:
-            recommendations.append("Good opportunity - Moderate competition")
+        if opportunity_score >= 70:
+            recommendations.extend([
+                f"✅ High opportunity detected for '{keyword}'",
+                "Consider entering this market with differentiated products",
+                "Focus on quality and customer reviews to stand out",
+                "Monitor top competitors for pricing strategies"
+            ])
+        elif opportunity_score >= 50:
+            recommendations.extend([
+                f"⚠️ Moderate opportunity for '{keyword}'",
+                "Further research recommended before investment",
+                "Look for niche sub-categories within this keyword",
+                "Consider bundling with related products"
+            ])
         else:
-            recommendations.append("Challenging market - High competition")
+            recommendations.extend([
+                f"❌ Low opportunity for '{keyword}'",
+                "Market is highly competitive or saturated",
+                "Consider alternative keywords or products",
+                "If proceeding, focus on unique value proposition"
+            ])
         
-        price_gaps = analysis.get("price_gaps", [])
-        if price_gaps:
-            best_gap = max(price_gaps, key=lambda x: x["gap_size"])
-            recommendations.append(f"Price gap found: ${best_gap['low']}-${best_gap['high']}. Target: ${best_gap['opportunity_price']}")
-        
-        avg_price = analysis.get("average_price", 0)
-        if avg_price > 50:
-            recommendations.append("Premium market - Higher margins possible")
-        elif avg_price < 20:
-            recommendations.append("Budget market - High volume needed")
+        # Add AI-based recommendations
+        key_points = ai_insights.get("key_points", [])
+        if key_points and len(key_points) > 0:
+            recommendations.append("AI Insights:")
+            recommendations.extend(key_points[:2])  # Add top 2 AI insights
         
         return recommendations
+
+# Global instance
+keyword_analyzer = KeywordAnalyzer()

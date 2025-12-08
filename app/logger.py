@@ -1,8 +1,10 @@
 import logging
 import sys
+from datetime import datetime
 
 def setup_logger():
-    logger = logging.getLogger("amazon_agent")
+    """Setup application logger"""
+    logger = logging.getLogger("amazon_ai_agent")
     logger.setLevel(logging.INFO)
     
     # Console handler
@@ -16,7 +18,11 @@ def setup_logger():
     )
     console_handler.setFormatter(formatter)
     
-    logger.addHandler(console_handler)
+    # Add handler
+    if not logger.handlers:
+        logger.addHandler(console_handler)
+    
     return logger
 
+# Create logger instance
 logger = setup_logger()
