@@ -8,3 +8,4 @@ psycopg2-binary==2.9.9
 python-dotenv==1.0.0
 pytz==2023.3
 apify-client>=1.2.0
+gunicorn==21.2.0
