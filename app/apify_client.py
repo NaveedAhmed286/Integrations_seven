@@ -17,7 +17,12 @@ class ApifyClient:
         if not self.api_token:
             logger.warning("⚠️ APIFY_TOKEN not configured in environment variables")
         else:
-            logger.info("✅ Apify client initialized with token")
+            # Debug token details
+            logger.info("✅ Apify client initialized")
+            logger.info(f"   Token length: {len(self.api_token)}")
+            logger.info(f"   Token (raw): {repr(self.api_token)}")
+            logger.info(f"   Token (stripped): {repr(self.api_token.strip())}")
+            logger.info(f"   Token starts with: {self.api_token[:10]}...")
     
     async def scrape_amazon_products(self, keyword: str, max_products: int = 50) -> Dict:
         """
@@ -121,7 +126,7 @@ class ApifyClient:
         url = f"{self.base_url}/acts/junglee~free-amazon-product-scraper/runs"
         
         headers = {
-            "Authorization": f"Bearer {self.api_token}",
+            "Authorization": f"Bearer {self.api_token.strip()}",  # FIXED: added .strip()
             "Content-Type": "application/json"
         }
         
@@ -154,7 +159,7 @@ class ApifyClient:
         check_url = f"{self.base_url}/actor-runs/{run_id}"
         
         headers = {
-            "Authorization": f"Bearer {self.api_token}",
+            "Authorization": f"Bearer {self.api_token.strip()}",  # FIXED: added .strip()
             "Content-Type": "application/json"
         }
         
@@ -192,7 +197,7 @@ class ApifyClient:
         run_url = f"{self.base_url}/actor-runs/{run_id}"
         
         headers = {
-            "Authorization": f"Bearer {self.api_token}",
+            "Authorization": f"Bearer {self.api_token.strip()}",  # FIXED: added .strip()
             "Content-Type": "application/json"
         }
         
@@ -272,7 +277,7 @@ class ApifyClient:
         test_url = f"{self.base_url}/users/me"
         
         headers = {
-            "Authorization": f"Bearer {self.api_token}",
+            "Authorization": f"Bearer {self.api_token.strip()}",  # FIXED: added .strip()
             "Content-Type": "application/json"
         }
         
