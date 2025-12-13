@@ -6,7 +6,6 @@ from typing import Dict, List, Optional, Any
 from app.logger import logger
 from app.memory_manager import memory_manager
 
-
 class AmazonAgent:
     def __init__(self):
         self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -79,7 +78,9 @@ Based on client history, provide targeted analysis.
         """Analyze Amazon products for a specific keyword"""
         try:
             logger.info(f"📊 Starting keyword analysis for: '{keyword}'")
-            from app.apify_client import apify_client
+            
+            # ✅ Correct import for apify_client
+            from app.agent.apify_client import apify_client
             
             # 1. Scrape Amazon for this keyword
             scrape_result = await apify_client.scrape_amazon_products(
@@ -157,12 +158,10 @@ Based on client history, provide targeted analysis.
         if not self.deepseek_api_key:
             logger.warning("DeepSeek API key not configured")
             return "Analysis service not configured."
-
         headers = {
             "Authorization": f"Bearer {self.deepseek_api_key}",
             "Content-Type": "application/json"
         }
-
         prompt = self._build_analysis_prompt(context, analysis_type)
         payload = {
             "model": "deepseek-chat",
@@ -173,7 +172,6 @@ Based on client history, provide targeted analysis.
             "temperature": 0.7,
             "max_tokens": 2000
         }
-
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -212,9 +210,7 @@ Based on client history, provide targeted analysis.
         if analysis_type == "product_analysis":
             return f"""
 Analyze these Amazon products for investment potential:
-
 {context}
-
 Provide:
 1. Market demand assessment
 2. Competition analysis
@@ -222,7 +218,6 @@ Provide:
 4. Risk factors
 5. Investment recommendation (Yes/No/Maybe)
 6. Key insights (bullet points)
-
 Format as structured JSON if possible.
 """
         else:
@@ -280,7 +275,6 @@ Provide detailed analysis with actionable insights.
             return "Low"
         else:
             return "Unknown"
-
 
 # Global instance
 agent = AmazonAgent()
