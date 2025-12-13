@@ -2,10 +2,9 @@ import os
 import asyncio
 import uuid
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Optional
-import redis
 
 from app.logger import logger
 from app.queue_manager import QueueManager
@@ -36,20 +35,15 @@ class KeywordAnalysisRequest(BaseModel):
     max_products: int = 50
     callback_url: Optional[str] = None
 
-class StatusRequest(BaseModel):
-    task_id: str
-
 @app.on_event("startup")
 async def startup_event():
-    """Initialize on startup"""
-    logger.info("🚀 Amazon AI Agent starting up...")
-    # Start background queue processor
+    logger.info("Amazon AI Agent starting up...")
     asyncio.create_task(queue_processor())
 
 @app.get("/")
 async def root():
     return {
-        "message": "🚀 Amazon AI Queue Agent",
+        "message": "Amazon AI Queue Agent",
         "status": "running",
         "version": "1.0.0",
         "endpoints": {
@@ -63,7 +57,6 @@ async def root():
 
 @app.post("/api/analyze/products")
 async def analyze_products(request: ProductAnalysisRequest):
-    """Submit products for analysis"""
     try:
         task_id = str(uuid.uuid4())
         await queue_manager.add_task(
@@ -87,7 +80,6 @@ async def analyze_products(request: ProductAnalysisRequest):
 
 @app.post("/api/analyze/keyword")
 async def analyze_keyword(request: KeywordAnalysisRequest):
-    """Submit keyword for analysis"""
     try:
         task_id = str(uuid.uuid4())
         await queue_manager.add_task(
@@ -113,11 +105,9 @@ async def analyze_keyword(request: KeywordAnalysisRequest):
 
 @app.get("/api/status/{task_id}")
 async def get_status(task_id: str):
-    """Check task status and get results"""
     try:
         result = await queue_manager.get_task_result(task_id)
         if not result:
-            # Check if task exists
             task_info = await queue_manager.get_task_info(task_id)
             if not task_info:
                 raise HTTPException(status_code=404, detail="Task not found")
@@ -136,7 +126,6 @@ async def get_status(task_id: str):
 
 @app.get("/api/queue/stats")
 async def queue_stats():
-    """Get queue statistics"""
     try:
         stats = await queue_manager.get_queue_stats()
         return {
@@ -149,7 +138,6 @@ async def queue_stats():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
     try:
         queue_size = await queue_manager.get_queue_size()
         redis_status = await queue_manager.check_health()
@@ -167,26 +155,20 @@ async def health_check():
             "error": str(e)
         }
 
-# Background queue processor
 async def queue_processor():
-    """Process tasks from queue in background"""
-    logger.info("🔄 Queue processor started")
+    logger.info("Queue processor started")
     while True:
         try:
-            # Process next task
             processed = await process_next_task()
             if not processed:
-                # No tasks, wait before checking again
                 await asyncio.sleep(5)
             else:
-                # Small delay between tasks
                 await asyncio.sleep(1)
         except Exception as e:
             logger.error(f"Queue processor error: {e}")
-            await asyncio.sleep(10)  # Wait longer on error
+            await asyncio.sleep(10)
 
 async def process_next_task():
-    """Process a single task from queue"""
     try:
         task = await queue_manager.get_next_task()
         if not task:
@@ -196,17 +178,14 @@ async def process_next_task():
         task_type = task["type"]
         client_id = task["client_id"]
         data = task["data"]
-        
-        logger.info(f"🔄 Processing {task_type}: {task_id}")
 
-        # Update task status
+        logger.info(f"Processing {task_type}: {task_id}")
+
         await queue_manager.update_task_status(task_id, "processing")
 
-        # Process based on type
         if task_type == "product_analysis":
             results = await agent.analyze_products(data["products"])
         elif task_type == "keyword_analysis":
-            # Use the new analyze_keyword method from agent
             results = await agent.analyze_keyword(
                 keyword=data["keyword"],
                 client_id=client_id,
@@ -215,7 +194,6 @@ async def process_next_task():
         else:
             results = {"error": "Unknown task type", "status": "failed"}
 
-        # Save results
         await queue_manager.save_task_result(
             task_id=task_id,
             client_id=client_id,
@@ -224,17 +202,21 @@ async def process_next_task():
             callback_url=task.get("callback_url")
         )
 
-        logger.info(f"✅ Completed {task_type}: {task_id}")
+        logger.info(f"Completed {task_type}: {task_id}")
         return True
 
     except Exception as e:
         logger.error(f"Task processing failed: {e}")
-        # Mark task as failed
         if "task_id" in locals():
             await queue_manager.save_task_result(
                 task_id=task_id,
                 client_id=client_id,
                 task_type=task_type,
+                results={"error": str(e), "status": "failed"},
+                callback_url=task.get("callback_url")
+            )
+        return False
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
