@@ -3,6 +3,8 @@ import json
 import aiohttp
 from datetime import datetime
 from typing import Dict, List, Optional, Any
+from googleapiclient.discovery import build
+from google.oauth2.service_account import Credentials
 from app.logger import logger
 from app.memory_manager import memory_manager
 
@@ -20,20 +22,32 @@ class AmazonAgent:
                 analysis_type="product_analysis"
             )
             insights = self._extract_insights(analysis)
+            recommendations = self._generate_recommendations(analysis, insights)
+
+            # Save result to Google Sheet (top product)
+            try:
+                if products:
+                    save_to_sheet({
+                        "title": products[0].get("title", ""),
+                        "price": products[0].get("price", ""),
+                        "investment": "N/A",
+                        "score": "N/A",
+                        "recommendation": recommendations.get("investment_advice", "")
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to save to Google Sheet: {e}")
+
             return {
                 "status": "success",
                 "products_analyzed": len(products),
                 "analysis": analysis,
                 "insights": insights,
-                "recommendations": self._generate_recommendations(analysis, insights),
+                "recommendations": recommendations,
                 "timestamp": datetime.utcnow().isoformat()
             }
         except Exception as e:
             logger.error(f"Product analysis error: {e}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
+            return {"status": "error", "error": str(e)}
 
     async def analyze_with_memory(self, client_id: str, products: List[Dict]) -> Dict:
         """Analyze products with client memory context"""
@@ -61,6 +75,20 @@ Based on client history, provide targeted analysis.
                 result_data=analysis,
                 key_insights=insights[:3]
             )
+
+            # Save to Google Sheet
+            try:
+                if products:
+                    save_to_sheet({
+                        "title": products[0].get("title", ""),
+                        "price": products[0].get("price", ""),
+                        "investment": "N/A",
+                        "score": "N/A",
+                        "recommendation": self._generate_recommendations(analysis, insights).get("investment_advice", "")
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to save to Google Sheet: {e}")
+
             return {
                 "status": "success",
                 "client_id": client_id,
@@ -78,16 +106,14 @@ Based on client history, provide targeted analysis.
         """Analyze Amazon products for a specific keyword"""
         try:
             logger.info(f"📊 Starting keyword analysis for: '{keyword}'")
-            
-            # ✅ Correct import for apify_client
             from app.agent.apify_client import apify_client
-            
-            # 1. Scrape Amazon for this keyword
+
+            # Scrape Amazon products
             scrape_result = await apify_client.scrape_amazon_products(
                 keyword=keyword,
                 max_products=max_products
             )
-            
+
             if not scrape_result["success"]:
                 return {
                     "status": "error",
@@ -95,9 +121,8 @@ Based on client history, provide targeted analysis.
                     "keyword": keyword,
                     "client_id": client_id
                 }
-            
+
             products = scrape_result["products"]
-            
             if not products:
                 return {
                     "status": "success",
@@ -110,11 +135,11 @@ Based on client history, provide targeted analysis.
                         "scraper_used": scrape_result.get("scraper_used", "unknown")
                     }
                 }
-            
-            # 2. Analyze the scraped products with DeepSeek
+
+            # Analyze scraped products
             analysis_result = await self.analyze_products(products)
-            
-            # 3. Add memory if client_id is provided
+
+            # Add memory if client_id
             if client_id:
                 try:
                     task_id = f"keyword_{int(datetime.utcnow().timestamp())}"
@@ -128,8 +153,20 @@ Based on client history, provide targeted analysis.
                     )
                 except Exception as mem_error:
                     logger.warning(f"Memory saving failed: {mem_error}")
-            
-            # 4. Combine all results
+
+            # Save top product to Google Sheet
+            try:
+                if products:
+                    save_to_sheet({
+                        "title": products[0].get("title", ""),
+                        "price": products[0].get("price", ""),
+                        "investment": "N/A",
+                        "score": "N/A",
+                        "recommendation": analysis_result.get("recommendations", {}).get("investment_advice", "")
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to save keyword result to Google Sheet: {e}")
+
             return {
                 "status": "success",
                 "client_id": client_id,
@@ -143,15 +180,10 @@ Based on client history, provide targeted analysis.
                 "sample_products": products[:3],
                 "timestamp": datetime.utcnow().isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"Keyword analysis error: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "keyword": keyword,
-                "client_id": client_id
-            }
+            return {"status": "error", "error": str(e), "keyword": keyword, "client_id": client_id}
 
     async def _get_deepseek_analysis(self, context: str, analysis_type: str) -> str:
         """Get analysis from DeepSeek API"""
@@ -192,7 +224,6 @@ Based on client history, provide targeted analysis.
             return f"Request failed: {str(e)}"
 
     def _prepare_product_context(self, products: List[Dict]) -> str:
-        """Prepare product data for analysis"""
         context_lines = []
         for i, product in enumerate(products[:10]):
             context_lines.append(f"Product {i+1}:")
@@ -206,7 +237,6 @@ Based on client history, provide targeted analysis.
         return "\n".join(context_lines)
 
     def _build_analysis_prompt(self, context: str, analysis_type: str) -> str:
-        """Build prompt for DeepSeek"""
         if analysis_type == "product_analysis":
             return f"""
 Analyze these Amazon products for investment potential:
@@ -227,7 +257,6 @@ Provide detailed analysis with actionable insights.
 """
 
     def _extract_insights(self, analysis: str) -> List[str]:
-        """Extract key insights from analysis text"""
         insights = []
         lines = analysis.split('\n')
         for line in lines:
@@ -239,7 +268,6 @@ Provide detailed analysis with actionable insights.
         return insights
 
     def _generate_recommendations(self, analysis: str, insights: List[str]) -> Dict:
-        """Generate actionable recommendations"""
         return {
             "investment_advice": self._extract_investment_advice(analysis),
             "next_steps": [
@@ -253,7 +281,6 @@ Provide detailed analysis with actionable insights.
         }
 
     def _extract_investment_advice(self, analysis: str) -> str:
-        """Extract investment advice from analysis"""
         analysis_lower = analysis.lower()
         if 'not recommended' in analysis_lower or 'avoid' in analysis_lower:
             return "Not Recommended"
@@ -265,7 +292,6 @@ Provide detailed analysis with actionable insights.
             return "Needs Further Research"
 
     def _assess_risk_level(self, analysis: str) -> str:
-        """Assess risk level from analysis"""
         analysis_lower = analysis.lower()
         if any(word in analysis_lower for word in ['high risk', 'very risky', 'dangerous']):
             return "High"
@@ -275,6 +301,32 @@ Provide detailed analysis with actionable insights.
             return "Low"
         else:
             return "Unknown"
+
+
+# Google Sheets helper
+def save_to_sheet(result: dict):
+    SPREADSHEET_ID = os.getenv("GOOGLE_SHEET_ID")
+    creds = Credentials.from_service_account_file(
+        "service_account.json",
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    service = build("sheets", "v4", credentials=creds)
+
+    values = [[
+        result.get("title", ""),
+        result.get("price", ""),
+        result.get("investment", ""),
+        result.get("score", ""),
+        result.get("recommendation", "")
+    ]]
+
+    service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range="Sheet1!A:E",
+        valueInputOption="USER_ENTERED",
+        body={"values": values}
+    ).execute()
+
 
 # Global instance
 agent = AmazonAgent()
