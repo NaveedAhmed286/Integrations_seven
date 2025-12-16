@@ -35,7 +35,7 @@ class AmazonAgent:
         self.sheets_service = build("sheets", "v4", credentials=self.creds)
 
         # Apify
-        self.apify = ApifyClientWrapper()
+        self.apify = apify_client
 
     # ---------------------------
     # SMART PRODUCT LIMIT LOGIC
