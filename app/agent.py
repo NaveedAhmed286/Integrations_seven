@@ -165,6 +165,7 @@ class AmazonAgent:
     # DEEPSEEK ANALYSIS
     # ---------------------------
     async def _deepseek_analyze(self, products: List[Dict]) -> Dict:
+        print("DEBUG: _deepseek_analyze started")
         print("=" * 60)
         print("🚨 DEBUG: _deepseek_analyze START")
         print(f"🚨 DEBUG: self.deepseek_api_key exists: {bool(self.deepseek_api_key)}")
@@ -193,6 +194,7 @@ class AmazonAgent:
 
         async with aiohttp.ClientSession() as session:
                 print("🚨 DEBUG: Making DeepSeek API call...")
+                print("DEBUG: Calling DeepSeek API")
             async with session.post(
                 self.deepseek_api_url,
                 headers=headers,
@@ -207,7 +209,16 @@ class AmazonAgent:
                 
                 # Try to parse as JSON
                 try:
+                print(f"DEBUG: HTTP Status: {resp.status}")
+                # Try to get response text first
+                try:
+                    response_text = await resp.text()
+                    print(f"DEBUG: Response length: {len(response_text)}")
+                    print(f"DEBUG: First 100 chars: {response_text[:100]}")
                     data = await resp.json()
+                except Exception as e:
+                    print(f"ERROR: Failed to parse response: {e}")
+                    raise
                     print("🚨 DEBUG: Response parsed as JSON successfully")
                 except Exception as e:
                     print(f"🚨 ERROR: Failed to parse JSON: {e}")
