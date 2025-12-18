@@ -69,7 +69,6 @@ class AmazonAgent:
     # PRODUCT ANALYSIS (DIRECT)
     # ---------------------------
     async def analyze_products(self, products:
-        import os
         print(f"🔍 DEBUG analyze_products STARTED")
         print(f"🔍 DEBUG: Products received: {products}")
         print(f"🔍 DEBUG: DEEPSEEK_API_KEY exists: {'DEEPSEEK_API_KEY' in os.environ}")
