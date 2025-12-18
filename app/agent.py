@@ -16,7 +16,7 @@ class AmazonAgent:
     def __init__(self):
         # DeepSeek
         self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
-        self.deepseek_api_url = "https://api.deepseek.com/v1/chat/completions"
+        self.deepseek_api_url = "https://api.deepseek.com/chat/completions"
 
         # Google Sheets
         self.spreadsheet_id = os.getenv("SPREADSHEET_ID")
@@ -159,7 +159,7 @@ class AmazonAgent:
     # ---------------------------
     async def _deepseek_analyze(self, products: List[Dict]) -> Dict:
         headers = {
-            "Authorization": f"Bearer {self.deepseek_api_key}",
+            "Authorization": f"Bearer {self.deepseek_api_key.strip()}",
             "Content-Type": "application/json"
         }
 
