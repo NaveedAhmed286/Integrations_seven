@@ -171,7 +171,7 @@ class AmazonAgent:
         }
 
         # SIMPLE prompt that forces JSON
-        prompt = "Return ONLY JSON with format: {'products': [{'title': 'Test', 'price': 29.99, 'score': 85, 'recommendation': 'Buy'}]}"
+        prompt = f"""Analyze these Amazon products and return JSON only:\n{json.dumps(products[:3], indent=2)}\n\nReturn JSON with this exact structure:\n{{\n  \"products\": [\n    {{\n      \"title\": \"product title\",\n      \"price\": 99.99,\n      \"score\": 85,\n      \"recommendation\": \"Buy/Avoid/Research\"\n    }}\n  ]\n}}"""
         
         payload = {
             "model": "deepseek-chat",
