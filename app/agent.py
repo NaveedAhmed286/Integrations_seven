@@ -15,7 +15,7 @@ from app.apify_client import apify_client
 class AmazonAgent:
     def __init__(self):
         # DeepSeek
-        self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+        self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         self.deepseek_api_url = "https://api.deepseek.com/chat/completions"
 
         # Google Sheets
@@ -68,14 +68,11 @@ class AmazonAgent:
     # ---------------------------
     # PRODUCT ANALYSIS (DIRECT)
     # ---------------------------
-    async def analyze_products(self, products:
-        print(f"🔍 DEBUG analyze_products STARTED")
-        print(f"🔍 DEBUG: Products received: {products}")
-        print(f"🔍 DEBUG: DEEPSEEK_API_KEY exists: {'DEEPSEEK_API_KEY' in os.environ}")
-        print(f"🔍 DEBUG: DEEPSEEK_API_KEY length: {len(os.getenv('DEEPSEEK_API_KEY', ''))}")
-        print(f"🔍 DEBUG: APIFY_TOKEN exists: {'APIFY_TOKEN' in os.environ}")
-        print(f"🔍 DEBUG: First 10 chars of DeepSeek key: {os.getenv('DEEPSEEK_API_KEY', '')[:10] if os.getenv('DEEPSEEK_API_KEY') else 'None'}") List[Dict]) -> Dict:
+    async def analyze_products(self, products: List[Dict]) -> Dict:
         try:
+            # Debug logging (CORRECTLY PLACED inside try block)
+            print(f"DEBUG: analyze_products called with {len(products)} products")
+            
             analysis = await self._deepseek_analyze(products)
 
             rows = []
@@ -164,18 +161,8 @@ class AmazonAgent:
     # DEEPSEEK ANALYSIS
     # ---------------------------
     async def _deepseek_analyze(self, products: List[Dict]) -> Dict:
-        print("DEBUG: _deepseek_analyze started")
-        print("=" * 60)
-        print("🚨 DEBUG: _deepseek_analyze START")
-        print(f"🚨 DEBUG: self.deepseek_api_key exists: {bool(self.deepseek_api_key)}")
-        if self.deepseek_api_key:
-            print(f"🚨 DEBUG: Key starts with: {self.deepseek_api_key[:10]}...")
-            print(f"🚨 DEBUG: Key length: {len(self.deepseek_api_key)}")
-        print(f"🚨 DEBUG: Products count: {len(products)}")
-        print(f"🚨 DEBUG: First product: {products[0] if products else None}")
-        print("=" * 60)
         headers = {
-            "Authorization": f"Bearer {self.deepseek_api_key.strip()}",
+            "Authorization": f"Bearer {self.deepseek_api_key}",
             "Content-Type": "application/json"
         }
 
@@ -192,52 +179,14 @@ class AmazonAgent:
         }
 
         async with aiohttp.ClientSession() as session:
-                print("🚨 DEBUG: Making DeepSeek API call...")
-                print("DEBUG: Calling DeepSeek API")
             async with session.post(
                 self.deepseek_api_url,
                 headers=headers,
                 json=payload,
                 timeout=120
             ) as resp:
-                print(f"🚨 DEBUG: HTTP Status Code: {resp.status}")
-                # Get raw response first
-                raw_response = await resp.text()
-                print(f"🚨 DEBUG: Raw response length: {len(raw_response)}")
-                print(f"🚨 DEBUG: First 300 chars: {raw_response[:300]}")
-                
-                # Try to parse as JSON
-                try:
-                print(f"DEBUG: HTTP Status: {resp.status}")
-                # Try to get response text first
-                try:
-                    response_text = await resp.text()
-                    print(f"DEBUG: Response length: {len(response_text)}")
-                    print(f"DEBUG: First 100 chars: {response_text[:100]}")
-                    data = await resp.json()
-                except Exception as e:
-                    print(f"ERROR: Failed to parse response: {e}")
-                    raise
-                    print("🚨 DEBUG: Response parsed as JSON successfully")
-                except Exception as e:
-                    print(f"🚨 ERROR: Failed to parse JSON: {e}")
-                    print(f"🚨 ERROR: Full response: {raw_response}")
-                    raise Exception(f"DeepSeek API returned invalid JSON: {str(e)[:100]}")
+                data = await resp.json()
 
-        # Check if API returned error
-        if "error" in data:
-            print(f"🚨 ERROR: DeepSeek API error: {data['error']}")
-            raise Exception(f"DeepSeek API error: {data['error']}")
-        
-        if "choices" not in data:
-            print(f"🚨 ERROR: No choices in response. Data: {data}")
-            raise Exception("DeepSeek returned no choices in response")
-        
-        if not data["choices"]:
-            print(f"🚨 ERROR: Empty choices array. Data: {data}")
-            raise Exception("DeepSeek returned empty choices array")
-        
-        print(f"🚨 DEBUG: Found {len(data['choices'])} choice(s) in response")
         content = data["choices"][0]["message"]["content"]
         parsed = json.loads(content)
 
@@ -248,4 +197,4 @@ class AmazonAgent:
                 "Avoid fragile categories",
                 "Focus on consistent pricing"
             ]
-    }
+            }
