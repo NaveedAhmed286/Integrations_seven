@@ -68,7 +68,14 @@ class AmazonAgent:
     # ---------------------------
     # PRODUCT ANALYSIS (DIRECT)
     # ---------------------------
-    async def analyze_products(self, products: List[Dict]) -> Dict:
+    async def analyze_products(self, products:
+        import os
+        print(f"🔍 DEBUG analyze_products STARTED")
+        print(f"🔍 DEBUG: Products received: {products}")
+        print(f"🔍 DEBUG: DEEPSEEK_API_KEY exists: {'DEEPSEEK_API_KEY' in os.environ}")
+        print(f"🔍 DEBUG: DEEPSEEK_API_KEY length: {len(os.getenv('DEEPSEEK_API_KEY', ''))}")
+        print(f"🔍 DEBUG: APIFY_TOKEN exists: {'APIFY_TOKEN' in os.environ}")
+        print(f"🔍 DEBUG: First 10 chars of DeepSeek key: {os.getenv('DEEPSEEK_API_KEY', '')[:10] if os.getenv('DEEPSEEK_API_KEY') else 'None'}") List[Dict]) -> Dict:
         try:
             analysis = await self._deepseek_analyze(products)
 
