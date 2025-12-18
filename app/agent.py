@@ -20,12 +20,14 @@ class AmazonAgent:
 
         # Google Sheets
         self.spreadsheet_id = os.getenv("SPREADSHEET_ID")
-    if not self.spreadsheet_id:
+        if not self.spreadsheet_id:
         logger.error("❌ SPREADSHEET_ID environment variable is not set in Railway!")
         logger.error("Please set SPREADSHEET_ID in Railway Variables")
 
         self.sheet_name = os.getenv("SHEET_NAME", "Sheet1")
 
+
+        
         # Google service account (Railway ENV)
         service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
         if not service_account_json:
