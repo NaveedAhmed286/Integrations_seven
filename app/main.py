@@ -7,6 +7,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 
+# Import psutil with fallback
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+
 from app.logger import logger
 from app.queue_manager import QueueManager
 from app.agent import AmazonAgent
@@ -36,7 +43,8 @@ app_state = {
         "deepseek": True,
         "apify": True
     },
-    "last_health_check": datetime.utcnow()
+    "last_health_check": datetime.utcnow(),
+    "shutting_down": False
 }
 
 # ========== MODELS ==========
@@ -53,16 +61,38 @@ class KeywordAnalysisRequest(BaseModel):
 
 # ========== SIGNAL HANDLING ==========
 def handle_shutdown(signum, frame):
+    """Handle graceful shutdown signals"""
+    if app_state["shutting_down"]:
+        return  # Already shutting down
+    
     logger.info("🛑 Received shutdown signal, initiating graceful shutdown...")
     app_state["healthy"] = False
-    # Allow time for current tasks to complete
-    asyncio.create_task(graceful_shutdown())
+    app_state["shutting_down"] = True
+    
+    # Set a timeout for graceful shutdown
+    asyncio.create_task(graceful_shutdown(timeout=30))
 
-async def graceful_shutdown():
-    """Wait for current tasks to complete before shutdown"""
-    logger.info("⏳ Waiting 10 seconds for active tasks to complete...")
-    await asyncio.sleep(10)
-    logger.info("✅ Shutdown complete")
+async def graceful_shutdown(timeout: int = 30):
+    """Wait for current tasks to complete before shutdown with timeout"""
+    logger.info(f"⏳ Waiting {timeout} seconds for active tasks to complete...")
+    
+    try:
+        # Wait for timeout or until all tasks are done
+        start_time = datetime.utcnow()
+        while (datetime.utcnow() - start_time).seconds < timeout:
+            # Check if queue is empty or small enough
+            queue_size = await queue_manager.get_queue_size()
+            if queue_size <= 1:  # Allow 1 task to complete
+                break
+            await asyncio.sleep(2)
+            
+        logger.info("✅ Graceful shutdown complete")
+    except Exception as e:
+        logger.error(f"Shutdown monitoring error: {e}")
+    finally:
+        # Force exit after timeout
+        logger.info("🛑 Shutting down now")
+        os._exit(0)
 
 signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
@@ -72,6 +102,12 @@ signal.signal(signal.SIGINT, handle_shutdown)
 async def startup_event():
     """Initialize all background tasks"""
     logger.info("🚀 Amazon AI Queue Agent v2.0 starting up...")
+    
+    # Log configuration
+    logger.info(f"📊 Log level: {os.getenv('LOG_LEVEL', 'INFO')}")
+    
+    if not PSUTIL_AVAILABLE:
+        logger.warning("⚠️ psutil not installed. Health monitoring limited to basic checks.")
     
     # Start all background services
     asyncio.create_task(queue_processor())
@@ -85,20 +121,25 @@ async def health_monitor():
     """Monitor system resources"""
     while app_state["healthy"]:
         try:
-            # Memory usage
-            memory = psutil.virtual_memory()
-            if memory.percent > 85:
-                logger.warning(f"⚠️ High memory usage: {memory.percent}%")
-            
-            # CPU usage
-            cpu_percent = psutil.cpu_percent(interval=1)
-            if cpu_percent > 80:
-                logger.warning(f"⚠️ High CPU usage: {cpu_percent}%")
-            
-            # Disk space
-            disk = psutil.disk_usage('/')
-            if disk.percent > 90:
-                logger.warning(f"⚠️ Low disk space: {disk.percent}%")
+            if PSUTIL_AVAILABLE:
+                # Memory usage
+                memory = psutil.virtual_memory()
+                if memory.percent > 85:
+                    logger.warning(f"⚠️ High memory usage: {memory.percent}%")
+                
+                # CPU usage
+                cpu_percent = psutil.cpu_percent(interval=1)
+                if cpu_percent > 80:
+                    logger.warning(f"⚠️ High CPU usage: {cpu_percent}%")
+                
+                # Disk space
+                disk = psutil.disk_usage('/')
+                if disk.percent > 90:
+                    logger.warning(f"⚠️ Low disk space: {disk.percent}%")
+            else:
+                # Simple heartbeat log every 5 minutes
+                if datetime.utcnow().minute % 5 == 0:
+                    logger.debug("Health monitor heartbeat (psutil not available)")
                 
         except Exception as e:
             logger.debug(f"Health monitor error: {e}")
@@ -117,11 +158,11 @@ async def service_health_checker():
                 app_state["external_services"]["redis"] = redis_ok
                 if not redis_ok:
                     logger.error("🔴 Redis connection lost")
-            except:
+            except Exception as e:
                 app_state["external_services"]["redis"] = False
+                logger.debug(f"Redis health check error: {e}")
             
-            # Simple timestamp update for other services
-            # (You can add actual checks here)
+            # Add more service checks as needed
             
         except Exception as e:
             logger.debug(f"Service health check error: {e}")
@@ -135,11 +176,13 @@ async def queue_processor():
     
     consecutive_failures = 0
     max_consecutive_failures = 5
+    failure_backoff = 1
     
     while app_state["healthy"]:
         try:
             # Reset failure counter on successful iteration
             consecutive_failures = 0
+            failure_backoff = 1
             
             # Process a batch of tasks
             processed = await process_batch()
@@ -156,9 +199,11 @@ async def queue_processor():
                 logger.critical(f"🚨 Queue processor failed {consecutive_failures} times consecutively. Pausing for 5 minutes.")
                 await asyncio.sleep(300)  # 5 minutes
                 consecutive_failures = 0
+                failure_backoff = 1
             else:
                 logger.error(f"⚠️ Queue processor error {consecutive_failures}/{max_consecutive_failures}: {e}")
-                await asyncio.sleep(consecutive_failures * 10)  # Exponential backoff
+                failure_backoff = min(failure_backoff * 2, 60)  # Exponential backoff, max 60 seconds
+                await asyncio.sleep(failure_backoff)
     
     logger.info("Queue processor stopped (app shutting down)")
 
@@ -231,8 +276,8 @@ async def process_single_task(task: Dict) -> bool:
                 task_type=task.get("type"),
                 results={"error": str(e), "status": "failed"}
             )
-        except:
-            pass  # Even saving failure failed
+        except Exception as save_error:
+            logger.error(f"Failed to save task failure: {save_error}")
         
         return True  # Task was "processed" (failed)
 
@@ -366,14 +411,16 @@ async def health_check():
         
         status = "healthy" if (redis_health and services_ok and queue_healthy) else "degraded"
         
-        return {
+        # Base health data
+        health_data = {
             "status": status,
             "timestamp": datetime.utcnow().isoformat(),
             "uptime": str(datetime.utcnow() - app_state["start_time"]),
             "resources": {
-                "memory_percent": psutil.virtual_memory().percent if 'psutil' in globals() else "unknown",
-                "cpu_percent": psutil.cpu_percent(interval=1) if 'psutil' in globals() else "unknown",
-                "queue_restarts": app_state["queue_restarts"]
+                "queue_restarts": app_state["queue_restarts"],
+                "memory_percent": "unknown",
+                "cpu_percent": "unknown",
+                "queue_size": queue_size
             },
             "tasks": {
                 "total": app_state["total_tasks"],
@@ -383,7 +430,18 @@ async def health_check():
             "services": app_state["external_services"]
         }
         
+        # Add psutil metrics if available
+        if PSUTIL_AVAILABLE:
+            try:
+                health_data["resources"]["memory_percent"] = psutil.virtual_memory().percent
+                health_data["resources"]["cpu_percent"] = psutil.cpu_percent(interval=1)
+            except Exception as e:
+                logger.debug(f"Failed to get system metrics: {e}")
+        
+        return health_data
+        
     except Exception as e:
+        logger.error(f"Health check failed: {e}")
         return {"status": "unhealthy", "error": str(e)}
 
 @app.get("/")
@@ -415,6 +473,8 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
+    logger.info(f"Starting server on port {port}")
+    
     uvicorn.run(
         app,
         host="0.0.0.0",
