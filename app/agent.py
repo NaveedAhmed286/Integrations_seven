@@ -1,8 +1,9 @@
-# app/agent.py
+# app/agent.py - FIXED VERSION
 import os
 import json
 import asyncio
 import re
+import logging  # ADDED FOR LOGGING CONSTANTS
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 import aiohttp
@@ -57,20 +58,27 @@ class AmazonAgent:
     def _extract_search_keyword(self, product_description: str) -> Optional[str]:
         """
         Extract a clean search keyword from Google Form product description.
-        Returns None if no meaningful keyword can be extracted.
+        Returns the original keyword if extraction fails.
         """
         if not product_description or not isinstance(product_description, str):
             logger.warning("⚠️ Empty or invalid product description")
             return None
         
-        # Clean and normalize
+        # If it's already a clean keyword (1-3 words), use it directly
+        words = product_description.strip().split()
+        if 1 <= len(words) <= 4:
+            logger.info(f"🔑 Using direct keyword: '{product_description}'")
+            return product_description.strip()
+        
+        # Clean and normalize for longer descriptions
         description = product_description.strip().lower()
         
         # Common stop words to remove
         stop_words = {
             'i', 'want', 'to', 'sell', 'buy', 'looking', 'for', 'a', 'an', 'the',
             'something', 'anything', 'some', 'any', 'good', 'best', 'popular',
-            'online', 'amazon', 'product', 'products', 'item', 'items'
+            'online', 'amazon', 'product', 'products', 'item', 'items', 'please',
+            'help', 'me', 'find', 'recommend', 'suggest'
         }
         
         # Split and filter
@@ -78,12 +86,15 @@ class AmazonAgent:
                 if word not in stop_words and len(word) > 2]
         
         if not words:
-            logger.warning(f"⚠️ No meaningful keywords in description: '{product_description}'")
-            return None
+            logger.warning(f"⚠️ No meaningful keywords in: '{product_description}'")
+            # Return first 2 words as fallback
+            fallback = " ".join(product_description.strip().split()[:2])
+            logger.info(f"🔄 Using fallback keyword: '{fallback}'")
+            return fallback
         
         # Take first 3 meaningful words as keyword
         keyword = " ".join(words[:3])
-        logger.info(f"🔑 Extracted keyword '{keyword}' from description: '{product_description}'")
+        logger.info(f"🔑 Extracted keyword '{keyword}' from: '{product_description[:50]}...'")
         return keyword
     
     def _decide_product_limit(self, investment: Optional[float], fallback: int = 50) -> int:
@@ -115,8 +126,8 @@ class AmazonAgent:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((HttpError, TimeoutError, ConnectionError)),
-        before=before_log(logger, "INFO"),
-        after=after_log(logger, "INFO")
+        before=before_log(logger, logging.INFO),  # FIXED: Use logging.INFO
+        after=after_log(logger, logging.INFO)     # FIXED: Use logging.INFO
     )
     def _save_to_sheet(self, rows: List[List[Any]]) -> bool:
         """Save to Google Sheets with automatic retry on failure"""
@@ -148,7 +159,10 @@ class AmazonAgent:
     # ========== RESILIENT PRODUCT ANALYSIS ==========
     @retry(
         stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=3, max=8)
+        wait=wait_exponential(multiplier=1, min=3, max=8),
+        retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
+        before=before_log(logger, logging.INFO),  # FIXED
+        after=after_log(logger, logging.INFO)     # FIXED
     )
     async def analyze_products(self, products: List[Dict], client_id: Optional[str] = None) -> Dict:
         """Analyze products with full error handling and retry"""
@@ -228,7 +242,9 @@ class AmazonAgent:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=6),
-        retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError))
+        retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
+        before=before_log(logger, logging.INFO),  # FIXED
+        after=after_log(logger, logging.INFO)     # FIXED
     )
     async def _deepseek_analyze(self, products: List[Dict]) -> Dict:
         """Call DeepSeek API with retry logic for unstable internet"""
@@ -379,16 +395,18 @@ class AmazonAgent:
     @retry(
         stop=stop_after_attempt(2),
         wait=wait_exponential(multiplier=1.5, min=5, max=20),
-        retry=retry_if_exception_type((asyncio.TimeoutError, ConnectionError))
+        retry=retry_if_exception_type((asyncio.TimeoutError, ConnectionError)),
+        before=before_log(logger, logging.INFO),  # FIXED
+        after=after_log(logger, logging.INFO)     # FIXED
     )
-    async def analyze_keyword(self, product_description: str, client_id: str, 
+    async def analyze_keyword(self, keyword: str, client_id: str,  # CHANGED: Accepts 'keyword' not 'product_description'
                             max_products: int = 50, investment: Optional[float] = None,
                             price_min: Optional[float] = None, price_max: Optional[float] = None) -> Dict:
         """
         Main analysis method for Google Form submissions.
         
         Args:
-            product_description: From Google Form (required)
+            keyword: From Google Form (required) - CHANGED PARAMETER NAME
             client_id: User identifier
             max_products: Maximum products to return
             investment: Budget amount (affects product limit)
@@ -396,17 +414,20 @@ class AmazonAgent:
             price_max: Maximum price filter
         """
         try:
-            # Step 1: Extract keyword from description
-            search_keyword = self._extract_search_keyword(product_description)
+            # Step 1: Extract/search keyword from input
+            # The 'keyword' parameter might be a full description or just a keyword
+            search_keyword = self._extract_search_keyword(keyword)
             if not search_keyword:
                 return {
                     "status": "failed",
-                    "error": "Could not extract valid search keyword from description",
+                    "error": "Could not extract valid search keyword",
                     "client_id": client_id,
-                    "description": product_description
+                    "input": keyword[:100]
                 }
             
-            logger.info(f"🔍 Processing request for client {client_id}: '{search_keyword}'")
+            logger.info(f"🔍 Processing request for client {client_id}")
+            logger.info(f"   Input: '{keyword[:50]}...'")
+            logger.info(f"   Search keyword: '{search_keyword}'")
             
             # Step 2: Determine product limit based on investment
             final_limit = self._decide_product_limit(investment, max_products)
@@ -485,7 +506,7 @@ class AmazonAgent:
                     analysis_type="keyword",
                     input_data={
                         "keyword": search_keyword,
-                        "description": product_description,
+                        "original_input": keyword,
                         "investment": investment,
                         "price_min": price_min,
                         "price_max": price_max
@@ -500,8 +521,8 @@ class AmazonAgent:
             return {
                 "status": "completed",
                 "client_id": client_id,
-                "keyword": search_keyword,
-                "original_description": product_description,
+                "search_keyword": search_keyword,
+                "original_input": keyword,
                 "scraped": len(products),
                 "analyzed": analysis_result.get("count", 0),
                 "saved_to_sheets": analysis_result.get("saved_to_sheets", False),
@@ -519,12 +540,18 @@ class AmazonAgent:
                 "status": "failed",
                 "error": str(e),
                 "client_id": client_id,
-                "description": product_description
+                "input": keyword[:100]
             }
     
     # ========== QUICK TEST METHOD ==========
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=2, max=5),
+        before=before_log(logger, logging.INFO),  # FIXED
+        after=after_log(logger, logging.INFO)     # FIXED
+    )
     async def test_connection(self) -> Dict:
-        """Test all external connections"""
+        """Test all external connections with retry"""
         tests = {
             "google_sheets": False,
             "deepseek_api": False,
