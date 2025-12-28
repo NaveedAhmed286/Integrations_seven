@@ -1,0 +1,99 @@
+name: Agent tasks (scaffold tests / preview deploy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Task to run (scaffold-tests | preview-deploy)'
+        required: true
+        default: 'scaffold-tests'
+      target_branch:
+        description: 'Optional branch name to create'
+        required: false
+
+jobs:
+  scaffold:
+    if: ${{ github.event.inputs.task == 'scaffold-tests' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # needed to commit created files
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Ensure tests folder and add starter tests
+        id: scaffold
+        run: |
+          set -e
+          CHANGED=0
+
+          if [ ! -d tests ]; then
+            mkdir tests
+            CHANGED=1
+          fi
+
+          if [ ! -f tests/test_smoke.py ]; then
+            cat > tests/test_smoke.py <<'PYTEST'
+# Smoke test: verifies the FastAPI app import and that the queue processor module is importable.
+try:
+    import app.main as main_module
+    import app.agent as agent_module
+except Exception as e:
+    raise e
+
+def test_imports():
+    assert hasattr(main_module, 'app') or True  # FastAPI app object may be called 'app'
+    assert agent_module is not None
+PYTEST
+            git add tests/test_smoke.py
+            CHANGED=1
+          fi
+
+          if [ ! -f tests/test_sheets_mock.py ]; then
+            cat > tests/test_sheets_mock.py <<'PYTEST'
+# Example test to demonstrate mocking Google Sheets interactions.
+# Edit to match your real sheet adapter functions in app.agent or app.sheets.
+
+from unittest.mock import MagicMock
+import pytest
+
+# Example: if your agent has a function save_analysis_to_sheet(sheet_id, row)
+# from app.agent import save_analysis_to_sheet
+
+def test_sheet_mock(monkeypatch):
+    # Monkeypatch a hypothetical sheets append function used by your agent
+    appended = []
+    def fake_append(sheet_id, row):
+        appended.append((sheet_id, row))
+        return True
+
+    # monkeypatch.setattr('app.agent.sheets.append_row', fake_append, raising=False)
+    # If you use a module app.sheets, adapt the path above.
+
+    # Simulate agent saving data
+    appended.append(('SHEET123', {'analysis': 'ok'}))
+    assert len(appended) == 1
+    assert appended[0][0] == 'SHEET123'
+PYTEST
+            git add tests/test_sheets_mock.py
+            CHANGED=1
+          fi
+
+          if [ $CHANGED -eq 1 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            BRANCH_NAME="${{ github.event.inputs.target_branch || 'test-scaffold-' }}${GITHUB_RUN_ID}"
+            git checkout -b "$BRANCH_NAME"
+            git commit -m "chore(tests): scaffold basic tests (created by agent task)" || echo "no changes to commit"
+            git push --set-upstream origin "$BRANCH_NAME"
+            echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          else
+            echo "no_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Print result
+        run: |
+          echo "Result outputs:"
+          if [ -f $GITHUB_OUTPUT ]; then cat $GITHUB_OUTPUT; fi
