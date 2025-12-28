@@ -2,7 +2,8 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_analyze_keyword_happy_path(amazon_agent, monkeypatch):
-    # Arrange: ensure apify_client returns one product
+    """Test keyword analysis with mocked Apify client"""
+    # Arrange: mock Apify scrape function
     async def fake_scrape_amazon_products(keyword, max_products, client_id, price_min=None, price_max=None):
         return {
             "success": True,
@@ -21,31 +22,51 @@ async def test_analyze_keyword_happy_path(amazon_agent, monkeypatch):
             ]
         }
 
-    # Patch the apify_client scrape function
+    # Patch the apify_client
     monkeypatch.setattr("app.apify_client.scrape_amazon_products", fake_scrape_amazon_products, raising=False)
 
-    # Patch analyze_products to return a quick analyzed result
+    # Patch analyze_products to isolate keyword flow
     async def fake_analyze_products(products, client_id=None):
         return {
             "status": "completed",
             "count": len(products),
             "saved_to_sheets": True,
-            "products": [{"title": products[0].get("title", "x"), "price": products[0].get("price", 0), "score": 70, "recommendation": "Research"}],
+            "products": products,  # Pass through products
             "insights": ["sample insight"]
         }
+    
     monkeypatch.setattr(amazon_agent, "analyze_products", fake_analyze_products)
 
-    # Act - Call with correct signature matching your actual code
+    # Act - match your actual method signature
     result = await amazon_agent.analyze_keyword(
         keyword="wireless headphones",
         client_id="client-123",
         max_products=10,
-        investment=1500
-        # price_min and price_max are optional in your code
+        investment=1500,
+        price_min=10.0,
+        price_max=100.0
     )
 
-    # Assert expectations on returned structure
-    assert result["status"] == "completed" or result["status"] == "failed"  # More flexible
+    # Assert - flexible assertions for your return structure
+    assert result["status"] in ["completed", "failed"]
     assert result["client_id"] == "client-123"
-    assert "search_keyword" in result or "keyword" in result  # Your code might return either
-    assert "scraped" in result or "analyzed" in result  # Check for either field
+    assert "search_keyword" in result or "keyword" in result
+    assert "scraped" in result  # Your code returns scraped count
+
+@pytest.mark.asyncio 
+async def test_analyze_keyword_no_products(amazon_agent, monkeypatch):
+    """Test keyword analysis when no products found"""
+    async def fake_scrape_no_products(*args, **kwargs):
+        return {"success": True, "products": []}
+    
+    monkeypatch.setattr("app.apify_client.scrape_amazon_products", fake_scrape_no_products, raising=False)
+    
+    result = await amazon_agent.analyze_keyword(
+        keyword="nonexistent product",
+        client_id="test-client",
+        max_products=10
+    )
+    
+    assert result["status"] == "completed"
+    assert result["scraped"] == 0
+    assert "message" in result
