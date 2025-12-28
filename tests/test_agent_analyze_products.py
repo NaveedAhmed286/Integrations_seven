@@ -22,3 +22,6 @@ async def test_analyze_products_empty(amazon_agent):
     result = await amazon_agent.analyze_products([], client_id="test-client")
     assert isinstance(result, dict)
     assert "status" in result
+def test_intentional_failure_for_railway_debug():
+    """Intentional failure to test Railway Debug Assistant"""
+    assert False, "Testing Railway Debug Assistant - intentional failure"
