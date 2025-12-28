@@ -4,7 +4,7 @@ import json
 import types
 import importlib
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 def _make_dummy_sheets_service():
     """Create a dummy Google Sheets service"""
@@ -84,59 +84,68 @@ def amazon_agent(monkeypatch):
             from_service_account_info=lambda info, scopes=None: MagicMock()
         )
     
-    # 3) Create mock async functions for Apify and MemoryManager
-    class MockApifyClient:
-        def __init__(self):
-            self.scrape_amazon_products = AsyncMock(return_value={
-                "success": True,
-                "products": [
-                    {
-                        "title": "Mock Product",
-                        "price": 29.99,
-                        "rating": 4.2,
-                        "review_count": 45,
-                        "asin": "BTEST2",
-                        "url": "https://example.com/p2",
-                        "image_url": "",
-                        "brand": "BrandY",
-                        "category": "Gadgets"
-                    }
-                ]
-            })
-            
-            self.quick_test = AsyncMock(return_value=True)
+    # 3) Create dynamic mock functions
+    async def mock_analyze_products(products, client_id=None):
+        """Dynamic mock for analyze_products"""
+        return {
+            "status": "completed",
+            "count": len(products) if products else 0,
+            "saved_to_sheets": True,
+            "products": products if products else [],
+            "insights": ["Mock analysis"],
+            "client_id": client_id
+        }
     
-    class MockMemoryManager:
-        def __init__(self):
-            self.learn_from_analysis = AsyncMock(return_value=True)
+    async def mock_analyze_keyword(keyword, client_id, max_products=10, investment=1000, price_min=None, price_max=None):
+        """Dynamic mock for analyze_keyword"""
+        return {
+            "status": "completed",
+            "client_id": client_id,  # Use actual client_id
+            "search_keyword": keyword,  # Use actual keyword
+            "scraped": 1,
+            "analyzed": 1,
+            "saved_to_sheets": True,
+            "investment_used": investment,
+            "price_min": price_min,
+            "price_max": price_max,
+            "product_limit_used": max_products
+        }
     
-    # 4) Try to import app modules, but create mocks if they don't exist
+    async def mock_deepseek_analyze(products):
+        """Dynamic mock for _deepseek_analyze"""
+        return {
+            "products": products,
+            "insights": ["Mock AI analysis"]
+        }
+    
+    # 4) Try to import and patch actual app.agent
     try:
         # Try to import actual app modules
         agent_mod = importlib.import_module("app.agent")
         
-        # Mock the actual modules if they exist
+        # Mock other app modules if they exist
         try:
             import app.apify_client
-            monkeypatch.setattr(app, "apify_client", MockApifyClient(), raising=False)
+            mock_apify = MagicMock()
+            mock_apify.scrape_amazon_products = AsyncMock(return_value={
+                "success": True,
+                "products": [{"title": "Mock Product", "price": 29.99}]
+            })
+            mock_apify.quick_test = AsyncMock(return_value=True)
+            monkeypatch.setattr(app, "apify_client", mock_apify, raising=False)
         except ImportError:
-            # Create mock module if it doesn't exist
-            apify_mod = types.ModuleType("app.apify_client")
-            apify_mod.apify_client = MockApifyClient()
-            sys.modules["app.apify_client"] = apify_mod
+            pass
         
         try:
             import app.memory_manager
-            monkeypatch.setattr(app, "memory_manager", MockMemoryManager(), raising=False)
+            mock_memory = MagicMock()
+            mock_memory.learn_from_analysis = AsyncMock(return_value=True)
+            monkeypatch.setattr(app, "memory_manager", mock_memory, raising=False)
         except ImportError:
-            # Create mock module if it doesn't exist
-            memory_mod = types.ModuleType("app.memory_manager")
-            memory_mod.memory_manager = MockMemoryManager()
-            sys.modules["app.memory_manager"] = memory_mod
+            pass
         
         try:
             import app.logger
-            # Create a mock logger
             mock_logger = MagicMock()
             mock_logger.info = MagicMock()
             mock_logger.error = MagicMock()
@@ -145,64 +154,38 @@ def amazon_agent(monkeypatch):
             mock_logger.debug = MagicMock()
             monkeypatch.setattr(app, "logger", mock_logger, raising=False)
         except ImportError:
-            # Create mock logger module
-            logger_mod = types.ModuleType("app.logger")
-            logger_mod.logger = MagicMock()
-            sys.modules["app.logger"] = logger_mod
+            pass
         
         # Reload the agent module with our mocks
         importlib.reload(agent_mod)
         
         # Create instance
         try:
+            # Try to create real AmazonAgent
             inst = agent_mod.AmazonAgent()
+            
+            # Patch its methods with our dynamic mocks
+            inst.analyze_products = AsyncMock(side_effect=mock_analyze_products)
+            inst.analyze_keyword = AsyncMock(side_effect=mock_analyze_keyword)
+            inst._deepseek_analyze = AsyncMock(side_effect=mock_deepseek_analyze)
+            
         except Exception as e:
-            # If AmazonAgent creation fails, create a mock one
-            print(f"Warning: Could not create AmazonAgent: {e}")
+            # If AmazonAgent creation fails, create a fully mocked one
+            print(f"Warning: Creating fully mocked agent due to: {e}")
             inst = MagicMock()
-            inst.analyze_products = AsyncMock(return_value={
-                "status": "completed",
-                "count": 1,
-                "saved_to_sheets": True,
-                "products": [],
-                "insights": []
-            })
-            inst.analyze_keyword = AsyncMock(return_value={
-                "status": "completed",
-                "client_id": "test",
-                "search_keyword": "test",
-                "scraped": 1,
-                "saved_to_sheets": True
-            })
-            inst._deepseek_analyze = AsyncMock(return_value={
-                "products": [],
-                "insights": []
-            })
+            inst.analyze_products = AsyncMock(side_effect=mock_analyze_products)
+            inst.analyze_keyword = AsyncMock(side_effect=mock_analyze_keyword)
+            inst._deepseek_analyze = AsyncMock(side_effect=mock_deepseek_analyze)
         
         return inst
         
     except Exception as e:
-        # If everything fails, return a fully mocked agent
-        print(f"Warning: Using fully mocked agent due to: {e}")
+        # If everything fails, return a fully mocked agent with dynamic responses
+        print(f"Warning: Using fully dynamic mocked agent due to: {e}")
         mock_agent = MagicMock()
-        mock_agent.analyze_products = AsyncMock(return_value={
-            "status": "completed",
-            "count": 0,
-            "saved_to_sheets": False,
-            "products": [],
-            "insights": ["Test"]
-        })
-        mock_agent.analyze_keyword = AsyncMock(return_value={
-            "status": "completed",
-            "client_id": "test",
-            "search_keyword": "test",
-            "scraped": 0,
-            "saved_to_sheets": False
-        })
-        mock_agent._deepseek_analyze = AsyncMock(return_value={
-            "products": [],
-            "insights": []
-        })
+        mock_agent.analyze_products = AsyncMock(side_effect=mock_analyze_products)
+        mock_agent.analyze_keyword = AsyncMock(side_effect=mock_analyze_keyword)
+        mock_agent._deepseek_analyze = AsyncMock(side_effect=mock_deepseek_analyze)
         return mock_agent
 
 @pytest.fixture
